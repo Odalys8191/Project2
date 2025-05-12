@@ -1,136 +1,260 @@
-#include <graphics.h>      // EasyXÍ¼ĞÎ¿â
-#include <conio.h>         // ¼üÅÌÊäÈë
-#include <vector>          // ¶¯Ì¬Êı×é
-#include <ctime>           // Ëæ»úÖÖ×Ó
+#include <graphics.h>
+#include <conio.h>
+#include <time.h>
+#include <vector>
 
-// ÓÎÏ·³£Á¿
-const int TILE_SIZE = 32;  // ¸ñ×ÓÏñËØ´óĞ¡
-const int MAP_W = 20;      // µØÍ¼¿í¸ñ×ÓÊı
-const int MAP_H = 15;      // µØÍ¼¸ß¸ñ×ÓÊı
+// æ¸¸æˆçŠ¶æ€
+enum GameState { PLAYING, GAME_OVER, LEVEL_UP };
+const int mapWidth = 800 / 25;  // 25
+const int mapHeight = 600 / 25; // 18
+int mapData[mapHeight][mapWidth] = { 0 }; // 0è¡¨ç¤ºç©ºåœ°ï¼Œ1è¡¨ç¤ºç –å—
+// ç©å®¶ç»“æ„ä½“
+struct Player {
+    int x, y;
+    int hp;
+    int maxHp;
+    int attack;
+    int defense;
+    int level;
+    int exp;
+} player = { 400, 300, 100, 100, 10, 5, 1, 0 };
 
-// µØÍ¼¸ñ×ÓÀàĞÍ
-enum TileType {
-    FLOOR,   // µØ°å
-    WALL,    // Ç½
-    DOOR     // ÃÅ
+// æ•Œäººç»“æ„ä½“
+struct Enemy {
+    int x, y;
+    int hp;
+    int attack;
+    bool active;
 };
 
-// ½ÇÉ«Àà
-class Character {
-public:
-    int x, y;          // µØÍ¼×ø±ê
-    int hp;            // ÉúÃüÖµ
-    int attack;        // ¹¥»÷Á¦
-    COLORREF color;    // ÏÔÊ¾ÑÕÉ«
-
-    Character(int x, int y, COLORREF c) : x(x), y(y), hp(10), attack(2), color(c) {}
-
-    // »æÖÆ½ÇÉ«
-    void draw() const {
-        setfillcolor(color);
-        solidcircle(x * TILE_SIZE + TILE_SIZE / 2, y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 3);
-    }
+// å­å¼¹ç»“æ„ä½“
+struct Bullet {
+    int x, y;
+    int dir; // 0-7è¡¨ç¤º8ä¸ªæ–¹å‘
+    bool active;
 };
 
-// ÓÎÏ·×´Ì¬
-struct Game {
-    TileType map[MAP_W][MAP_H];  // ¶şÎ¬µØÍ¼Êı×é
-    Character player{ 1, 1, RED }; // Íæ¼Ò½ÇÉ«
-    std::vector<Character> enemies; // µĞÈËÁĞ±í
-    bool isRunning = true;       // ÓÎÏ·ÔËĞĞ±êÖ¾
-};
+std::vector<Enemy> enemies;
+std::vector<Bullet> bullets;
+GameState gameState = PLAYING;
+const int tileSize = 32;
 
-// Éú³ÉËæ»úµØÍ¼£¨¼òµ¥Ê¾Àı£©
-void generateMap(Game& game) {
-    srand(time(0)); // Ëæ»úÖÖ×Ó
+// åˆå§‹åŒ–æ¸¸æˆ
+void GameInit() {
+    srand(time(0)); 
 
-    for (int x = 0; x < MAP_W; x++) {
-        for (int y = 0; y < MAP_H; y++) {
-            // ±ß½çÎªÇ½£¬ÄÚ²¿Ëæ»úÉú³É
-            if (x == 0 || y == 0 || x == MAP_W - 1 || y == MAP_H - 1) {
-                game.map[x][y] = WALL;
+    // ç”Ÿæˆå›ºå®šåœ°å›¾ï¼ˆåªåœ¨æ¸¸æˆå¼€å§‹æ—¶ç”Ÿæˆä¸€æ¬¡ï¼‰
+    for (int y = 0; y < mapHeight; y++) {
+        for (int x = 0; x < mapWidth; x++) {
+            // è¾¹ç¼˜ç”Ÿæˆå¢™å£
+            if (x == 0 || y == 0 || x == mapWidth - 1 || y == mapHeight - 1) {
+                mapData[y][x] = 1;
             }
             else {
-                game.map[x][y] = (rand() % 10 > 7) ? WALL : FLOOR;
+                // 30%æ¦‚ç‡ç”Ÿæˆç –å—
+                mapData[y][x] = (rand() % 100 < 30) ? 1 : 0;
+            }
+        }
+    }
+    // ç”Ÿæˆåˆå§‹æ•Œäºº
+    for (int i = 0; i < 5; i++) {
+        enemies.push_back({
+            rand() % 800,
+            rand() % 600,
+            50,
+            5,
+            true
+            });
+    }
+}
+
+// ç»˜åˆ¶åœ°å›¾
+void DrawMap() {
+    for (int y = 0; y < mapHeight; y++) {
+        for (int x = 0; x < mapWidth; x++) {
+            if (mapData[y][x] == 1) {
+                setfillcolor(RGB(150, 150, 150)); // ç°è‰²ç –å—
+                fillrectangle(x * tileSize, y * tileSize,
+                    (x + 1) * tileSize, (y + 1) * tileSize);
             }
         }
     }
 }
 
-// »æÖÆµØÍ¼
-void drawMap(const Game& game) {
-    for (int x = 0; x < MAP_W; x++) {
-        for (int y = 0; y < MAP_H; y++) {
-            // ¸ù¾İ¸ñ×ÓÀàĞÍÉèÖÃÑÕÉ«
-            COLORREF color = DARKGRAY;
-            switch (game.map[x][y]) {
-            case WALL:  color = BROWN; break;
-            case FLOOR: color = RGB(50, 50, 50); break;
-            case DOOR:  color = YELLOW; break;
-            }
+// ç©å®¶æ§åˆ¶
+void PlayerControl() {
+    int newX = player.x;
+    int newY = player.y;
 
-            // »æÖÆ¸ñ×Ó
-            setfillcolor(color);
-            solidrectangle(x * TILE_SIZE, y * TILE_SIZE,
-                (x + 1) * TILE_SIZE, (y + 1) * TILE_SIZE);
+    // è·å–è¾“å…¥
+    if (GetAsyncKeyState('W') & 0x8000) newY -= 3;
+    if (GetAsyncKeyState('S') & 0x8000) newY += 3;
+    if (GetAsyncKeyState('A') & 0x8000) newX -= 3;
+    if (GetAsyncKeyState('D') & 0x8000) newX += 3;
+
+    // è½¬æ¢ä¸ºåœ°å›¾æ ¼å­åæ ‡
+    int tileX = newX / tileSize;
+    int tileY = newY / tileSize;
+
+    // ç¢°æ’æ£€æµ‹ï¼ˆæ£€æµ‹å‘¨å›´3x3åŒºåŸŸï¼‰
+    bool canMove = true;
+    RECT rcIntersect; // å¢åŠ è¿™ä¸ªå˜é‡ç”¨äºæ¥æ”¶äº¤é›†åŒºåŸŸ
+
+    for (int y = tileY - 1; y <= tileY + 1; y++) {
+        for (int x = tileX - 1; x <= tileX + 1; x++) {
+            if (x >= 0 && y >= 0 && x < mapWidth && y < mapHeight) {
+                if (mapData[y][x] == 1) {
+                    // æ­£ç¡®åˆ›å»ºå¢™ä½“çš„RECTï¼ˆleft, top, right, bottomï¼‰
+                    RECT wallRect = {
+                        x * tileSize,
+                        y * tileSize,
+                        x * tileSize + tileSize,
+                        y * tileSize + tileSize
+                    };
+
+                    // æ­£ç¡®åˆ›å»ºç©å®¶RECTï¼ˆæ³¨æ„ä½¿ç”¨ä¸­å¿ƒç‚¹åæ ‡è½¬æ¢ï¼‰
+                    RECT playerRect = {
+                        newX - 10,  // left
+                        newY - 10,  // top
+                        newX + 10,  // right
+                        newY + 10   // bottom
+                    };
+
+                    // æ­£ç¡®çš„å‡½æ•°è°ƒç”¨ï¼ˆä¸‰ä¸ªå‚æ•°ï¼‰
+                    if (IntersectRect(&rcIntersect, &playerRect, &wallRect)) {
+                        canMove = false;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!canMove) break;
+    }
+    // æ›´æ–°ä½ç½®
+    if (canMove) {
+        player.x = newX;
+        player.y = newY;
+    }
+
+
+}
+
+// å‡çº§é€‰æ‹©ç•Œé¢
+void LevelUpMenu() {
+    settextcolor(WHITE);
+    settextstyle(24, 0, _T("å®‹ä½“"));
+    outtextxy(300, 200, _T("é€‰æ‹©å‡çº§é¡¹ï¼š"));
+    outtextxy(300, 250, _T("1. æ”»å‡»åŠ›+5"));
+    outtextxy(300, 300, _T("2. ç”Ÿå‘½å€¼+50"));
+    outtextxy(300, 350, _T("3. é˜²å¾¡åŠ›+3"));
+}
+
+// æ¸¸æˆä¸»å¾ªç¯
+void GameLoop() {
+    BeginBatchDraw();
+
+    cleardevice();
+    DrawMap();
+
+    // ç»˜åˆ¶ç©å®¶
+    setfillcolor(BLUE);
+    fillcircle(player.x, player.y, 10);
+
+    // æ›´æ–°æ•Œäºº
+    for (auto& e : enemies) {
+        if (!e.active) continue;
+
+        // æ•ŒäººAI
+        int dx = player.x - e.x;
+        int dy = player.y - e.y;
+        e.x += dx / 10;
+        e.y += dy / 10;
+
+        // ç»˜åˆ¶æ•Œäºº
+        setfillcolor(RED);
+        fillcircle(e.x, e.y, 8);
+
+        // ç¢°æ’æ£€æµ‹
+        if (abs(player.x - e.x) < 20 && abs(player.y - e.y) < 20) {
+            player.hp -= e.attack - player.defense;
         }
     }
-}
 
-// ´¦ÀíÍæ¼ÒÊäÈë
-void processInput(Game& game) {
-    if (!_kbhit()) return; // ÎŞ°´¼üÊ±Ö±½Ó·µ»Ø
+    // æ›´æ–°å­å¼¹
+    for (auto& b : bullets) {
+        if (!b.active) continue;
 
-    int dx = 0, dy = 0;
-    switch (_getch()) {
-    case 'W': case 'w': dy = -1; break;
-    case 'S': case 's': dy = 1; break;
-    case 'A': case 'a': dx = -1; break;
-    case 'D': case 'd': dx = 1; break;
-    case 27: game.isRunning = false; break; // ESCÍË³ö
+        // ç§»åŠ¨å­å¼¹
+        switch (b.dir) {
+        case 0: b.y -= 5; break;
+        case 1: b.x += 5; b.y -= 5; break;
+        case 2: b.x += 5; break;
+        case 3: b.x += 5; b.y += 5; break;
+            // ...å…¶ä»–æ–¹å‘
+        }
+
+        // ç»˜åˆ¶å­å¼¹
+        setfillcolor(YELLOW);
+        fillcircle(b.x, b.y, 3);
+
+        // ç¢°æ’æ£€æµ‹
+        for (auto& e : enemies) {
+            if (e.active && abs(b.x - e.x) < 15 && abs(b.y - e.y) < 15) {
+                e.hp -= player.attack;
+                if (e.hp <= 0) {
+                    e.active = false;
+                    player.exp += 10;
+                }
+                b.active = false;
+            }
+        }
     }
 
-    // ¼ÆËãĞÂÎ»ÖÃ
-    int newX = game.player.x + dx;
-    int newY = game.player.y + dy;
+    // æ˜¾ç¤ºçŠ¶æ€ä¿¡æ¯
+    settextcolor(WHITE);
+    TCHAR str[64];
+    swprintf_s(str, _T("HP: %d/%d  ATK: %d  DEF: %d  LV: %d"),
+        player.hp, player.maxHp, player.attack, player.defense, player.level);
+    outtextxy(10, 10, str);
 
-    // Åö×²¼ì²â
-    if (newX >= 0 && newX < MAP_W &&
-        newY >= 0 && newY < MAP_H &&
-        game.map[newX][newY] != WALL) {
-        game.player.x = newX;
-        game.player.y = newY;
+    // å‡çº§æ£€æµ‹
+    if (player.exp >= 100) {
+        player.level++;
+        player.exp -= 100;
+        gameState = LEVEL_UP;
     }
+
+    // å¤„ç†æ¸¸æˆçŠ¶æ€
+    switch (gameState) {
+    case LEVEL_UP:
+        LevelUpMenu();
+        if (GetAsyncKeyState('1')) { player.attack += 5; gameState = PLAYING; }
+        if (GetAsyncKeyState('2')) { player.maxHp += 50; gameState = PLAYING; }
+        if (GetAsyncKeyState('3')) { player.defense += 3; gameState = PLAYING; }
+        break;
+    case GAME_OVER:
+        outtextxy(350, 300, _T("Game Over!"));
+        break;
+    }
+
+    EndBatchDraw();
 }
 
-// Ö÷º¯Êı
 int main() {
-    initgraph(MAP_W * TILE_SIZE, MAP_H * TILE_SIZE); // ´´½¨´°¿Ú
-    Game game;
-    generateMap(game);
+    initgraph(800, 600);
+    GameInit();
 
-    // Éú³É²âÊÔµĞÈË
-    game.enemies.emplace_back(5, 5, GREEN);
-    game.enemies.emplace_back(8, 3, BLUE);
+    while (true) {
+        if (player.hp <= 0) gameState = GAME_OVER;
 
-    // ÓÎÏ·Ö÷Ñ­»·
-    while (game.isRunning) {
-        BeginBatchDraw(); // ¿ªÊ¼ÅúÁ¿»æÖÆ£¨·ÀÉÁË¸£©
-
-        cleardevice();    // Çå¿Õ»­Ãæ
-        drawMap(game);    // »æÖÆµØÍ¼
-        game.player.draw(); // »æÖÆÍæ¼Ò
-
-        // »æÖÆËùÓĞµĞÈË
-        for (const auto& enemy : game.enemies) {
-            enemy.draw();
+        if (gameState == PLAYING) {
+            PlayerControl();
         }
 
-        processInput(game); // ´¦ÀíÊäÈë
-        EndBatchDraw();   // ½áÊøÅúÁ¿»æÖÆ
-        Sleep(50);        // ¿ØÖÆÑ­»·ËÙ¶È
+        GameLoop();
+        Sleep(10);
     }
 
-    closegraph(); // ¹Ø±ÕÍ¼ĞÎ´°¿Ú
+    closegraph();
     return 0;
 }
