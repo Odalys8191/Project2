@@ -3,6 +3,8 @@
 #include <time.h>
 #include <vector>
 #include <cmath>
+#include <queue> 
+#include <algorithm>
 using namespace std;
 
 // 游戏状态
@@ -37,11 +39,29 @@ const EnemyConfig ENEMY_TYPES[] = {
 };
 
 // 敌人结构体
+
+struct Node {
+    int x, y;
+    int g, h, f;
+    Node* parent;
+
+    Node(int x, int y, Node* parent = nullptr) :
+        x(x), y(y), g(0), h(0), f(0), parent(parent) {
+    }
+
+    bool operator<(const Node& other) const {
+        return f > other.f;
+    }
+};
+
 struct Enemy {
     int x, y, hp, attackTimer = 0;
     bool active = true;
     EnemyConfig config;
     int chargeX, chargeY;
+    vector<pair<int, int>> path;
+    int pathUpdateTimer = 0;
+    int currentWaypoint = 0;
 };
 
 // 游戏全局数据
@@ -77,21 +97,153 @@ void DrawMap() {
             }
 }
 
+vector<pair<int, int>> FindPath(int startX, int startY, int targetX, int targetY) {
+    vector<pair<int, int>> path;
+
+    // 方向数组（四个方向）
+    const int dir[4][2] = { {0,1}, {1,0}, {0,-1}, {-1,0} };
+
+    priority_queue<Node> openList;
+    vector<vector<bool>> closedList(mapH, vector<bool>(mapW, false));
+    vector<vector<Node*>> nodeMap(mapH, vector<Node*>(mapW, nullptr));
+
+    Node* startNode = new Node(startX, startY);
+    startNode->h = abs(targetX - startX) + abs(targetY - startY);
+    startNode->f = startNode->h;
+    openList.push(*startNode);
+    nodeMap[startY][startX] = startNode;
+
+    while (!openList.empty()) {
+        Node current = openList.top();
+        openList.pop();
+
+        if (closedList[current.y][current.x]) continue;
+        closedList[current.y][current.x] = true;
+
+        // 找到目标节点
+        if (current.x == targetX && current.y == targetY) {
+            Node* p = &current;
+            while (p) {
+                path.emplace_back(p->x, p->y);
+                p = p->parent;
+            }
+            reverse(path.begin(), path.end());
+            break;
+        }
+
+        // 遍历相邻节点
+        for (auto& d : dir) {
+            int nx = current.x + d[0];
+            int ny = current.y + d[1];
+
+            if (nx < 0 || ny < 0 || nx >= mapW || ny >= mapH) continue;
+            if (mapData[ny][nx] != 0) continue;  // 跳过障碍物
+
+            int newG = current.g + 1;
+            Node* successor = nodeMap[ny][nx];
+
+            if (!successor || newG < successor->g) {
+                if (!successor) {
+                    successor = new Node(nx, ny);
+                    nodeMap[ny][nx] = successor;
+                }
+
+                successor->parent = new Node(current); // 简化处理
+                successor->g = newG;
+                successor->h = abs(targetX - nx) + abs(targetY - ny);
+                successor->f = successor->g + successor->h;
+                openList.push(*successor);
+            }
+        }
+    }
+
+    // 释放内存
+    for (auto& row : nodeMap)
+        for (auto& n : row)
+            delete n;
+
+    return path;
+}
+
 // 敌人移动逻辑
 void EnemyMove(Enemy& e, const Player& p) {
-    float dx = p.x - e.x, dy = p.y - e.y;
-    float dist = sqrt(dx * dx + dy * dy);
+    // 保存原始位置用于回滚
+    int originalX = e.x;
+    int originalY = e.y;
 
-    if (e.config.pattern == CHARGE && dist < e.config.attackRange) {
-        e.x += e.chargeX * 3;
-        e.y += e.chargeY * 3;
+    // 原始移动逻辑
+    // 定期更新路径（每秒2次）
+    if (--e.pathUpdateTimer <= 0) {
+        int startX = e.x / tileSize;
+        int startY = e.y / tileSize;
+        int targetX = p.x / tileSize;
+        int targetY = p.y / tileSize;
+
+        e.path = FindPath(startX, startY, targetX, targetY);
+        e.currentWaypoint = 0;
+        e.pathUpdateTimer = 30; // 半秒更新一次
     }
-    else {
-        if (dist > 0) { dx /= dist; dy /= dist; }
-        e.x += dx * e.config.speed;
-        e.y += dy * e.config.speed;
-        e.chargeX = dx;
-        e.chargeY = dy;
+
+    // 沿着路径移动
+    if (!e.path.empty() && e.currentWaypoint < e.path.size()) {
+        auto& waypoint = e.path[e.currentWaypoint];
+        int targetX = waypoint.first * tileSize + tileSize / 2;
+        int targetY = waypoint.second * tileSize + tileSize / 2;
+
+        float dx = targetX - e.x;
+        float dy = targetY - e.y;
+        float dist = sqrt(dx * dx + dy * dy);
+
+        if (dist < e.config.speed) {
+            e.currentWaypoint++;
+        }
+        else {
+            dx /= dist;
+            dy /= dist;
+            e.x += dx * e.config.speed;
+            e.y += dy * e.config.speed;
+        }
+    }
+
+
+    // 碰撞检测（新增部分）
+    bool canMove = true;
+    const int enemyRadius = e.config.pattern == MELEE ? 12 : 8;
+
+    // 检查周围3x3的地图格子
+    for (int y = e.y / tileSize - 1; y <= e.y / tileSize + 1; y++) {
+        for (int x = e.x / tileSize - 1; x <= e.x / tileSize + 1; x++) {
+            if (x >= 0 && y >= 0 && x < mapW && y < mapH && mapData[y][x]) {
+                RECT wall = {
+                    x * tileSize,
+                    y * tileSize,
+                    (x + 1) * tileSize,
+                    (y + 1) * tileSize
+                };
+
+                // 敌人碰撞区域（圆形）
+                RECT enemyArea = {
+                    e.x - enemyRadius,
+                    e.y - enemyRadius,
+                    e.x + enemyRadius,
+                    e.y + enemyRadius
+                };
+
+                RECT collision;
+                if (IntersectRect(&collision, &enemyArea, &wall)) {
+                    canMove = false;
+                    break;
+                }
+            }
+            if (!canMove) break;
+        }
+    }
+
+    // 如果碰撞则回滚位置
+    if (!canMove) {
+        e.x = originalX;
+        e.y = originalY;
+         
     }
 }
 
@@ -155,7 +307,7 @@ void PlayerControl() {
     if (GetAsyncKeyState(VK_SPACE) && shootTimer <= 0) {
         for (int i = 0; i < 8; i++) {
             float a = i * 3.1416f / 4;
-           // playerBullets.push_back({ player.x,player.y,cos(a) * 5,sin(a) * 5,5,true });
+            // playerBullets.push_back({ player.x,player.y,cos(a) * 5,sin(a) * 5,5,true });
             playerBullets.push_back({
         player.x,                    // int x
         player.y,                    // int y
@@ -249,6 +401,7 @@ void GameLoop() {
         gameState = LEVEL_UP;
         player.level++;
         player.exp -= 100;
+        player.hp = player.maxHp;
     }
     if (gameState == LEVEL_UP) {
         settextstyle(24, 0, L"宋体");
@@ -257,7 +410,7 @@ void GameLoop() {
         if (GetAsyncKeyState('2')) { player.maxHp += 50; gameState = PLAYING; }
     }
 
-    EndBatchDraw(); 
+    EndBatchDraw();
 }
 
 int main() {
