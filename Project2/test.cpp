@@ -1,21 +1,28 @@
+#pragma comment(lib, "msimg32.lib")  // 添加此行
+#pragma comment(lib, "gdi32.lib")    // 原有指令保留
 #include <graphics.h>
 #include <conio.h>
 #include <time.h>
 #include <vector>
 #include <cmath>
 #include <queue> 
-#include <algorithm>
+#include <algorithm> 
+
+
 using namespace std;
 
 // 游戏状态
 enum GameState { PLAYING, GAME_OVER, LEVEL_UP };
 
+IMAGE playerImg;
+IMAGE enemyImgs[3];
 // 玩家结构体
 struct Player {
     int x = 400, y = 300;
     int hp = 100, maxHp = 100;
     int attack = 10, defense = 5;
     int level = 1, exp = 0;
+    IMAGE* img = &playerImg;
 } player;
 
 // 子弹结构体
@@ -31,14 +38,32 @@ struct EnemyConfig {
     float speed;
     AttackPattern pattern;
     COLORREF color;
-};
-const EnemyConfig ENEMY_TYPES[] = {
-    {80,15,40,120,1.5f,MELEE,RGB(255,100,100)},
-    {50,10,200,180,1.0f,RANGED,RGB(100,200,100)},
-    {120,20,80,240,2.0f,CHARGE,RGB(100,100,255)}
+    IMAGE* img;
 };
 
-// 敌人结构体
+const EnemyConfig ENEMY_TYPES[] = {
+    {80,15,40,120,1.5f,MELEE,RGB(255,100,100), &enemyImgs[0]},
+    {50,10,200,180,1.0f,RANGED,RGB(100,200,100), &enemyImgs[1]},
+    {120,20,80,240,2.0f,CHARGE,RGB(100,100,255), &enemyImgs[2]}
+};
+ 
+
+// 添加透明绘制函数
+void DrawImageTransparent(int x, int y, IMAGE* img, COLORREF transparentColor) {
+    HDC dstDC = GetImageHDC();    // 获取窗口设备上下文
+    HDC srcDC = GetImageHDC(img); // 获取图像设备上下文
+    int w = img->getwidth();
+    int h = img->getheight();
+
+    // 使用 Windows API 实现透明绘制
+    TransparentBlt(
+        dstDC, x, y,        // 目标位置
+        w, h,               // 目标尺寸
+        srcDC, 0, 0,        // 源位置
+        w, h,               // 源尺寸
+        transparentColor    // 透明色
+    );
+}
 
 struct Node {
     int x, y;
@@ -75,7 +100,7 @@ int spawnTimer = 0;
 // 碰撞检测
 bool CheckCollision(int x1, int y1, int x2, int y2, int r) {
     int dx = x2 - x1, dy = y2 - y1;
-    return dx * dx + dy * dy < r * r;
+    return dx * dx + dy * dy < (r * 4) * (r * 4);  // 适当扩大碰撞范围
 }
 
 // 初始化游戏
@@ -85,6 +110,13 @@ void GameInit() {
     for (int y = 0; y < mapH; y++)
         for (int x = 0; x < mapW; x++)
             mapData[y][x] = (x == 0 || y == 0 || x == mapW - 1 || y == mapH - 1) ? 1 : rand() % 10 < 3;
+ //   mapData[400][300] = 0; 
+
+    loadimage(&playerImg, L"player.png", 32, 32);
+    loadimage(&enemyImgs[0], L"enemy0.png", 32, 32);
+    loadimage(&enemyImgs[1], L"enemy1.png", 32, 32);
+    loadimage(&enemyImgs[2], L"enemy2.png", 32, 32);
+  
 }
 
 // 绘制地图
@@ -136,9 +168,8 @@ vector<pair<int, int>> FindPath(int startX, int startY, int targetX, int targetY
             int nx = current.x + d[0];
             int ny = current.y + d[1];
 
-            if (nx < 0 || ny < 0 || nx >= mapW || ny >= mapH) continue;
-            if (mapData[ny][nx] != 0) continue;  // 跳过障碍物
-
+            if (nx < 1 || ny < 1 || nx >= mapW - 1 || ny >= mapH - 1) continue;  // 防止生成在边界
+            if (mapData[ny][nx] != 0) continue;
             int newG = current.g + 1;
             Node* successor = nodeMap[ny][nx];
 
@@ -148,7 +179,7 @@ vector<pair<int, int>> FindPath(int startX, int startY, int targetX, int targetY
                     nodeMap[ny][nx] = successor;
                 }
 
-                successor->parent = new Node(current); // 简化处理
+                successor->parent = nodeMap[current.y][current.x]; // 简化处理
                 successor->g = newG;
                 successor->h = abs(targetX - nx) + abs(targetY - ny);
                 successor->f = successor->g + successor->h;
@@ -167,11 +198,9 @@ vector<pair<int, int>> FindPath(int startX, int startY, int targetX, int targetY
 
 // 敌人移动逻辑
 void EnemyMove(Enemy& e, const Player& p) {
-    // 保存原始位置用于回滚
     int originalX = e.x;
     int originalY = e.y;
 
-    // 原始移动逻辑
     // 定期更新路径（每秒2次）
     if (--e.pathUpdateTimer <= 0) {
         int startX = e.x / tileSize;
@@ -181,10 +210,9 @@ void EnemyMove(Enemy& e, const Player& p) {
 
         e.path = FindPath(startX, startY, targetX, targetY);
         e.currentWaypoint = 0;
-        e.pathUpdateTimer = 30; // 半秒更新一次
+        e.pathUpdateTimer = 60; 
     }
 
-    // 沿着路径移动
     if (!e.path.empty() && e.currentWaypoint < e.path.size()) {
         auto& waypoint = e.path[e.currentWaypoint];
         int targetX = waypoint.first * tileSize + tileSize / 2;
@@ -206,11 +234,9 @@ void EnemyMove(Enemy& e, const Player& p) {
     }
 
 
-    // 碰撞检测（新增部分）
     bool canMove = true;
     const int enemyRadius = e.config.pattern == MELEE ? 12 : 8;
 
-    // 检查周围3x3的地图格子
     for (int y = e.y / tileSize - 1; y <= e.y / tileSize + 1; y++) {
         for (int x = e.x / tileSize - 1; x <= e.x / tileSize + 1; x++) {
             if (x >= 0 && y >= 0 && x < mapW && y < mapH && mapData[y][x]) {
@@ -262,15 +288,14 @@ void EnemyAttack(Enemy& e, Player& p) {
         e.attackTimer = e.config.attackInterval;
         break;
     case RANGED:
-        dx /= dist; dy /= dist;
-        //enemyBullets.push_back({ e.x,e.y,dx * 5,dy * 5,e.config.damage,true });
+        dx /= dist; dy /= dist; 
         enemyBullets.push_back({
-        e.x,                    // int x
-        e.y,                    // int y
-        static_cast<int>(dx * 5), // int dx (确保类型正确)
-        static_cast<int>(dy * 5), // int dy
-        e.config.damage,        // int damage
-        true                    // bool active
+        e.x,                   
+        e.y,                   
+        static_cast<int>(dx * 5), 
+        static_cast<int>(dy * 5), 
+        e.config.damage,        
+        true                   
             });
         e.attackTimer = e.config.attackInterval;
         break;
@@ -297,7 +322,7 @@ void PlayerControl() {
         for (int x = nx / tileSize - 1; x <= nx / tileSize + 1; x++)
             if (x >= 0 && y >= 0 && x < mapW && y < mapH && mapData[y][x]) {
                 RECT wall = { x * tileSize, y * tileSize, (x + 1) * tileSize, (y + 1) * tileSize };
-                RECT player = { nx - 10, ny - 10, nx + 10, ny + 10 };
+                RECT player = { nx - 16, ny - 16, nx + 16, ny + 16 };
                 if (IntersectRect(&rc, &player, &wall)) canMove = false;
             }
     if (canMove) { player.x = nx; player.y = ny; }
@@ -306,15 +331,15 @@ void PlayerControl() {
     static int shootTimer = 0;
     if (GetAsyncKeyState(VK_SPACE) && shootTimer <= 0) {
         for (int i = 0; i < 8; i++) {
-            float a = i * 3.1416f / 4;
+            float a = i * 3.1416f / 4 + 0.785f;
             // playerBullets.push_back({ player.x,player.y,cos(a) * 5,sin(a) * 5,5,true });
             playerBullets.push_back({
-        player.x,                    // int x
-        player.y,                    // int y
-        static_cast<int>(cos(a) * 5), // int dx (确保类型正确)
-        static_cast<int>(sin(a) * 5), // int dy
-        5,        // int damage
-        true                    // bool active
+        player.x,                     
+        player.y,                    
+        static_cast<int>(cos(a) * 5),  
+        static_cast<int>(sin(a) * 5),  
+        5,        
+        true                 
                 });
         }
         shootTimer = 20;
@@ -324,13 +349,22 @@ void PlayerControl() {
 
 // 游戏主循环
 void GameLoop() {
+    if (gameState == GAME_OVER) {
+        settextstyle(32, 0, L"宋体");
+        outtextxy(300, 250, L"游戏结束");
+        EndBatchDraw();
+        Sleep(2000);
+        exit(0);
+    }
     BeginBatchDraw();
     cleardevice();
 
     // 绘制地图和玩家
     DrawMap();
     setfillcolor(BLUE);
-    fillcircle(player.x, player.y, 10);
+    DrawImageTransparent(player.x - 16, player.y - 16, player.img, 0x010101);
+
+
 
     // 更新敌人
     auto e = enemies.begin();
@@ -342,7 +376,8 @@ void GameLoop() {
 
         // 绘制敌人
         setfillcolor(e->config.color);
-        fillcircle(e->x, e->y, e->config.pattern == MELEE ? 12 : 8);
+        DrawImageTransparent(e->x - 16, e->y - 16, e->config.img, 0x010101);
+
 
         // 玩家子弹碰撞
         auto b = playerBullets.begin();
@@ -361,10 +396,11 @@ void GameLoop() {
     // 敌人生成
     if (--spawnTimer <= 0) {
         enemies.push_back({
-            rand() % 800, rand() % 600,
-            ENEMY_TYPES[rand() % 3].maxHp,
-            0, true,
-            ENEMY_TYPES[rand() % 3]
+    (rand() % (mapW - 2) + 1) * tileSize + tileSize / 2,  // 生成在可通行区域
+    (rand() % (mapH - 2) + 1) * tileSize + tileSize / 2,
+    ENEMY_TYPES[rand() % 3].maxHp,
+    0, true,
+    ENEMY_TYPES[rand() % 3]
             });
         spawnTimer = 120;
     }
